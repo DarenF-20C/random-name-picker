@@ -157,117 +157,123 @@ export default class Slot {
    */
   public async spin(forcedWinner?: string): Promise<boolean> {
     if (!this.nameList.length) {
-      console.error('Name List is empty. Cannot start spinning.');
+      console.error("Name List is empty. Cannot start spinning.");
       return false;
     }
-  
     if (this.onSpinStart) {
       this.onSpinStart();
     }
-  
-    const { reelContainer, reelAnimation, shouldRemoveWinner } = this;
-    if (!reelContainer || !reelAnimation) {
+
+    const reelContainer = this.reelContainer;
+    const reelAnimation = this.reelAnimation;
+    const shouldRemoveWinner = this.shouldRemoveWinner;
+
+    if (!reelContainer || !reelAnimation) return false;
+
+    // Keep previous winner element if it exists, otherwise clear everything
+    const children = Array.from(reelContainer.children);
+    if (!this.havePreviousWinner) {
+      children.forEach((el) => el.remove());
+    } else {
+      // keep only the last element (previous winner)
+      children.slice(0, Math.max(0, children.length - 1)).forEach((el) => el.remove());
+    }
+
+    // How many items we should APPEND this round
+    const itemsToAppend = this.maxReelItems - Number(this.havePreviousWinner);
+    if (itemsToAppend <= 0) {
+      console.error("Invalid maxReelItems / havePreviousWinner state.");
       return false;
     }
-  
-    // How many items we need to render this round
-    const totalItems = this.maxReelItems - Number(this.havePreviousWinner);
-  
-    // Decide whether we can really force the winner
+
     const hasForcedWinner = !!forcedWinner && this.nameList.includes(forcedWinner);
-  
-    // Build the displayed list (winner is the LAST item)
-    let displayedNames: string[] = [];
-  
+
+    // Build the list to append; last item is the winner
+    let appendNames: string[] = [];
+
     if (hasForcedWinner) {
       const winner = forcedWinner as string;
-  
-      // Pool excludes winner so it doesn't appear multiple times
-      let pool = this.nameList.filter((n) => n !== winner);
-  
-      // If only winner exists, just repeat it
-      if (!pool.length) {
-        displayedNames = Array.from({ length: totalItems }, () => winner);
+
+      if (itemsToAppend === 1) {
+        appendNames = [winner];
       } else {
-        pool = Slot.shuffleNames(pool);
-  
-        // Ensure we have enough items for the reel
-        while (pool.length < Math.max(0, totalItems - 1)) {
-          pool = [...pool, ...pool];
+        // Pool excludes winner so it doesn't appear multiple times
+        let pool = this.nameList.filter((n) => n !== winner);
+
+        // If only winner exists, just repeat it
+        if (!pool.length) {
+          appendNames = Array.from({ length: itemsToAppend }, () => winner);
+        } else {
+          pool = Slot.shuffleNames(pool);
+
+          while (pool.length < Math.max(0, itemsToAppend - 1)) {
+            pool = [...pool, ...pool];
+          }
+
+          appendNames = pool.slice(0, Math.max(0, itemsToAppend - 1));
+          appendNames.push(winner);
         }
-  
-        // Take (totalItems - 1) random items, then append winner as last
-        displayedNames = pool.slice(0, Math.max(0, totalItems - 1));
-        displayedNames.push(winner);
       }
     } else {
-      // Original behavior (random)
       let randomNames = Slot.shuffleNames<string>(this.nameList);
-  
-      while (randomNames.length && randomNames.length < totalItems) {
+
+      while (randomNames.length && randomNames.length < itemsToAppend) {
         randomNames = [...randomNames, ...randomNames];
       }
-  
-      displayedNames = randomNames.slice(0, totalItems);
+
+      appendNames = randomNames.slice(0, itemsToAppend);
     }
-  
-    // Clear existing reel items (important if previous spin left stuff)
-    const reelItemsToRemove = reelContainer.children
-      ? Array.from(reelContainer.children)
-      : [];
-    reelItemsToRemove.forEach((el) => el.remove());
-  
-    // Append displayed items into reel
+
+    // Append reel items
     const fragment = document.createDocumentFragment();
-  
-    displayedNames.forEach((name) => {
-      const newReelItem = document.createElement('div');
-      newReelItem.innerHTML = name;
+    appendNames.forEach((name) => {
+      const newReelItem = document.createElement("div");
+      newReelItem.textContent = name; // safer than innerHTML
       fragment.appendChild(newReelItem);
     });
-  
     reelContainer.appendChild(fragment);
-  
-    const winner = displayedNames[displayedNames.length - 1];
-  
-    console.info('Displayed items: ', displayedNames);
-    console.info('Winner: ', winner);
-  
-    // Remove winner from name list if necessary (safe splice)
-    if (shouldRemoveWinner) {
-      const idx = this.nameList.findIndex((name) => name === winner);
-      if (idx >= 0) {
-        this.nameList.splice(idx, 1);
-      }
+
+    // Safety: ensure reel has exactly maxReelItems before playing animation
+    if (reelContainer.children.length !== this.maxReelItems) {
+      console.warn("Reel items count mismatch. Resetting reel to safe state.");
+      Array.from(reelContainer.children).forEach((el) => el.remove());
+      this.havePreviousWinner = false;
+      return this.spin(forcedWinner);
     }
-  
-    console.info('Remaining: ', this.nameList);
-  
-    // Play the spin animation
+
+    const winner = appendNames[appendNames.length - 1];
+
+    console.info("Displayed items (appended): ", appendNames);
+    console.info("Winner: ", winner);
+
+    if (shouldRemoveWinner) {
+      const idx = this.nameList.findIndex((n) => n === winner);
+      if (idx >= 0) this.nameList.splice(idx, 1);
+    }
+
+    console.info("Remaining: ", this.nameList);
+
+    // Play animation
     const animationPromise = new Promise<void>((resolve) => {
       reelAnimation.onfinish = () => resolve();
     });
-  
-    reelAnimation.cancel(); // ensure fresh start
+
+    reelAnimation.cancel();
     reelAnimation.play();
-  
+
     await animationPromise;
-  
-    // Sets the current playback time to the end of the animation
-    // Fix issue for animation not playing after the initial play on Safari
+
+    // Safari fix
     reelAnimation.finish();
-  
-    // Keep only the last (winner) element in DOM
+
+    // Keep only the last element (winner) in DOM
     Array.from(reelContainer.children)
       .slice(0, reelContainer.children.length - 1)
-      .forEach((element) => element.remove());
-  
+      .forEach((el) => el.remove());
+
     this.havePreviousWinner = true;
-  
-    if (this.onSpinEnd) {
-      this.onSpinEnd();
-    }
-  
+
+    if (this.onSpinEnd) this.onSpinEnd();
     return true;
   }
 }
